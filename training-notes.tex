@@ -1,0 +1,48 @@
+\documentclass{article}
+\usepackage{graphicx} % Required for inserting images
+
+\title{Online Handwriting}
+\author{Hudson Mitchell-Pullman}
+\date{October 2025}
+
+\begin{document}
+
+\maketitle
+
+Representing Online Handwriting for Recognition in Large Vision-Language Models
+
+Using Vision-language models to recognize online handwriting (digital ink) is more effective than images and OCR.
+
+
+RQ: How can users switch between modalities and turn handwritten notes into printed text?
+
+VLMs contain an underlying language model, so while they’re highly effective, they’re also computationally expensive.
+
+We need a time-ordered sequence because it is more effective than OCR.
+Based on images
+Based on time-ordered sequences
+Make the sequence of points a discrete sequence of text tokens that can be consumed by VLMs
+Requires fine-tuning or parameter-efficient tuning
+NO RETRAINING
+
+We let $S$ denote a Stroke, which is a sequence of triplets $(x, y, t)$ where $t$ denotes time and $x$ and $y$ are coordinates. We let $I$ denote Ink, where $I=[s_0, s_1, ..., s_n]$. The input of the model is ink $I$, and the output is the text written in the ink $I$ as text.
+
+Architecture:
+PaLI and PaLM-E architectures.
+Tokenize each digit separately. 
+Found it crucial to consider time sampling, scale normalization, coordinate representation, discretization, and token dictionary.
+
+If we visually encode, use vanilla ViT as the most popular
+and standard vision encoder solution.
+
+The performance of both VLMs fine-
+tuned for handwriting recognition is comparable to or
+better than state-of-the-art results.
+
+
+
+
+
+
+
+\end{document}
