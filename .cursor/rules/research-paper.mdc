@@ -1,0 +1,313 @@
+---
+alwaysApply: true
+---
+Follow the implementation of the below paper:
+# Representing Online Handwriting for Recognition in Large Vision-Language Models
+
+**Anastasiia Fadeeva\* ¹, Philippe Schlattner\* ¹, Andrii Maksai§ ¹, Mark Collier¹, Efi Kokiopoulou¹, Jesse Berent¹, Claudiu Musat§ ¹**
+
+\*Equal contribution. §Technical lead. ¹Google Research.  
+Correspondence to: Anastasiia Fadeeva <fadeich@google.com>, Andrii Maksai <amaksai@google.com>
+
+arXiv:2402.15307v1 [cs.CV] 23 Feb 2024
+
+---
+
+## Abstract
+
+The adoption of tablets with touchscreens and styluses is increasing, and a key feature is converting handwriting to text, enabling search, indexing, and AI assistance.
+
+Meanwhile, vision-language models (VLMs) are now the go-to solution for image understanding, thanks to both their state-of-the-art performance across a variety of tasks and the simplicity of a unified approach to training, fine-tuning, and inference. While VLMs obtain high performance on image-based tasks, they perform poorly on handwriting recognition when applied naively, i.e., by rendering handwriting as an image and performing optical character recognition (OCR).
+
+In this paper, we study online handwriting recognition with VLMs, going beyond naive OCR. We propose a novel tokenized representation of digital ink (online handwriting) that includes both a time-ordered sequence of strokes as text, and as image. We show that this representation yields results comparable to or better than state-of-the-art online handwriting recognizers. Wide applicability is shown through results with two different VLM families, on multiple public datasets. Our approach can be applied to off-the-shelf VLMs, does not require any changes in their architecture, and can be used in both fine-tuning and parameter-efficient tuning. We perform a detailed ablation study to identify the key elements of the proposed representation.
+
+---
+
+## 1. Introduction
+
+Digital alternatives to writing on paper are expanding. One of the key features users need is to seamlessly transition between modalities and turn their handwritten notes into printed text (Riche et al., 2017). This feature depends on the quality of the underlying handwriting recognition models.
+
+**Historical perspective.** Approaches to handwriting recognition have evolved over time alongside similar problems in speech recognition and OCR, going from segment-and-decode models (Hu et al., 1996) to RNNs (Carbune et al., 2020; Graves et al., 2009) to Transformer-based approaches (Dhiaf et al., 2023). However, as in other modalities, it is still far from being solved, especially in more complex cases that involve whole-page note-taking, math expression recognition, and scripts with small amounts of training data. This is also visible through the variety of model architectures used to solve these problems (Xie et al., 2023).
+
+**Why use VLMs?** LLMs and VLMs (Brown et al., 2020; Touvron et al., 2023; Chen et al., 2023a) have shown impressive performance in a variety of tasks and across different modalities and they can offer multiple benefits if they can be used for solving handwriting recognition problems (or any other target domain). The obvious one is a potential quality improvement coming from their scale and underlying language model. Their simple design allows fine-tuning a single model end-to-end using standard and widely available tools in contrast to standard multi-step recognition models, ex. (Carbune et al., 2020). Finally, they allow seamlessly mixing multiple handwriting tasks expanding the plethora of tasks they can already perform.
+
+**How to use VLMs?** To be able to instill VLMs with handwriting recognition, one needs a representation of digital ink that is suitable for use with VLMs. A straightforward approach is to simply provide a rendering of digital ink as an input image and perform OCR. However, for handwriting recognition, OCR-only performance is subpar to the quality of specialized online handwriting recognition models that operate on the digital ink as a time-ordered sequence of points (Xie et al., 2023).
+
+**Our work.** The focus of our work is the representation of digital ink for VLMs that is applicable across different datasets and model families, and yields comparable performance to state-of-the-art task-specific models. To our knowledge, we are the first to explore stroke-based representations in VLMs for handwriting recognition.
+
+In our search for a widely applicable representation of digital ink we explore two main options: based on images and time-ordered sequences of points. We look for the optimal way of rendering ink into an image and of discretizing the sequence of points into a sequence of text tokens that can be consumed by VLMs. We show how these representations should be combined together to achieve optimal performance.
+
+We find that it is possible to obtain good recognition quality while representing digital ink as text. This is unlike some other modalities like audio (Rubenstein et al., 2023), where adding a new modality into an existing model requires extending the token dictionary with the tokens of the new modality as well as modifying the model architecture. This means that our approach does not require any changes to existing models and enables adding handwriting recognition capabilities to pre-trained VLMs by fine-tuning or even parameter-efficient tuning, which further preserves original capabilities of the model. Our findings generalize across two model families and several different handwriting recognition datasets.
+
+**To sum up, our main contributions are as follows:**
+
+- We propose a representation for digital ink that combines images and time-ordered token sequences, which is suitable for use with VLMs;
+- We show that such a dual representation is vital for achieving performance comparable to state-of-the-art task-specific handwriting recognition models; to our knowledge this is the first work to explore stroke-based representations for online handwriting recognition in VLMs;
+- We show that our representation is suitable for fine-tuning or parameter-efficient tuning of a pre-trained VLM and does not require changing model architecture or vocabulary;
+- We perform a detailed ablation study to find the best way of representing digital ink as images and as token sequences.
+
+---
+
+## 2. Background
+
+This paper focuses on **online handwriting recognition**, meaning the input includes spatial and time information. Related work on the topic is summarized in Section 5. We denote a **stroke** s as a sequence of triplets (x, y, t) where x and y are coordinates on the screen and t is time information (Carbune et al., 2020). We denote an **ink** I = [s₀, ..., sₙ] as a sequence of written strokes (aka pen-down strokes). The input of our model is an ink I and the output is the text written in the ink.
+
+The VLM architectures that we use in this work are **PaLI** (Chen et al., 2023c;a) and **PaLM-E** (Driess et al., 2023), transformer-based models (Vaswani et al., 2017). PaLI is an encoder-decoder model that combines image and text representations in the encoder as shown in Fig. 1. PaLM-E is a decoder-only model that combines image and textual embeddings in its input. The main difference between the two is the presence of transformer encoder in PaLI. In our experiments with PaLM-E, we use non-causal mask on the input as described in Wang et al. (2022) given that Raffel et al. (2020) has shown that this approach provides similar quality to encoder-decoder models.
+
+**Figure 1. PaLI and PaLM-E architectures for ink recognition.**
+
+**Text tokenization in VLMs** plays an important role in the success of the training. Most models use the Byte-Pair Encoding (BPE) procedure (Kudo & Richardson, 2018), however there are different approaches to tokenizing numbers in text. It was shown in Liu & Low (2023) that tokenizing each digit separately helps with arithmetic operations, at the price of making the input sequence longer, as opposed to a BPE vocabulary that contains multi-digit tokens. We consider both options as PaLI utilizes standard BPE and PaLM-E uses the single digit tokenization strategy.
+
+---
+
+## 3. Method
+
+In our work we focus on representation choices that make online handwriting recognition suitable for VLMs. In this section we describe a range of possibilities to represent online handwriting as a sequence of time-ordered tokens and as images. We provide the recipe that we used in the experiments and the intuition behind it.
+
+### 3.1. Sequence representation
+
+In its original form online inks are represented as sequences of strokes with coordinates x, y and time information t, sampled. This could be encoded in text format as: "stroke x₀,₀ y₀,₀ t₀,₀ x₀,₁ y₀,₁ t₀,₁ ...". Even though this representation can be directly fed into a VLM, we found it crucial to consider time sampling, scale normalization, coordinate representation, discretization, and token dictionary. Below we outline each of these and Figure 2 depicts them.
+
+Time sampling, scale normalization, and token dictionary choice have an immediate effect on the length of the sequence used to represent this ink and Table 1 shows how doing them allows to reduce the sequence length significantly. The effect of other choices, namely coordinate representation, codebook, and token dictionary, is studied in Section 4.5.2.
+
+**Time sampling.** In order to normalize sampling frequency among different devices and reduce the sequence length, we resample points at regular time intervals within each stroke. It is critical to pick an appropriate time delta because with high values an ink can lose important writing details (see Appendix A for examples). After resampling, all points within each stroke have the same time delta between each other, so we can omit value t for the text representation (information about the duration of time between strokes is thus discarded). This allows us to significantly shorten the sequences due to lower number of points and an ability to omit value t from text, as seen in Tab. 1.
+
+**Table 1. Effect of normalization and tokenization on the sequence length.** Median numbers with mT5 (Xue et al., 2021) tokenizer on MathWriting dataset (Gervais et al., 2024). The first line reports the length when representing the ink as the original sequence of x, y, and t coordinates as described in the beginning of Section 3.1 and each following line cumulatively adds some form of processing described in the section. After time sampling, we remove the t from representation as described in the appropriate paragraph, and after scale normalization, we round x and y to the nearest integer.
+
+| Representation | # Points | # Tokens |
+|---|---|---|
+| Original x,y,t | 313 | 2692 |
+| +Time sampling | 178 | 1954 |
+| +Scale normalization | 178 | 381 |
+| +Extended token dictionary | 178 | 367 |
+
+**Scale normalization.** We scale and shift, preserving the aspect ratio, so that all points fit into the range between 0 and N (where N is the ViT encoder image size). That helps to account for potential differences in the input canvas size and to reduce the sequence length through smaller point coordinates that have a more compact text representation. We use the information about the scaling range when doing discretization, as described below.
+
+**Coordinate representation.** We represent points of the ink using the offsets of coordinates from one time-step to the next rather than the absolute coordinates: (xᵗʳ, yᵗʳ) = (xₜ, yₜ) − (xₜ₋₁, yₜ₋₁). In the ablation study, we compare the absolute and relative representations. See Fig. 2 for more details.
+
+**Discretization codebook.** We use two values to represent each point (x, y) in the ink, by rounding the normalized x and y coordinate to the nearest integer. In the ablation study, we show that this approach leads to better accuracy than using a learned codebook of offsets, similar to Ribeiro et al. (2020), where each offset is represented by a single token.
+
+**Token dictionary.** We represent each point (x, y) directly as text, as opposed to extending the token dictionary (Rubenstein et al., 2023). We use a separator expression to indicate the beginning of the new stroke, as "`<stroke>` 2 1 2 2 ...`<stroke>` 3 1 3 2 3 3 ...". In the ablation study, we compare this to the approach where the token dictionary of the model is extended with new tokens, which has similar performance but requires changes to the model.
+
+Note that when the input is provided as text, we are effectively performing tokenization twice. First, inks are converted to a model-agnostic sequence of indices in text format, as shown above. Then, these indices are converted to a final sequence of tokens accepted by the VLM by applying the model-specific tokenizer, e.g. using Byte-Pair Encoding. As a result, each token of the initial tokenization may correspond to several text tokens. Therefore, we observe that bigger indices coming out of the first tokenization result in increased sequence length of the second tokenization.
+
+**Figure 2. The full pipeline for the sequence representation in VLMs.** This pipeline includes time sampling, scale normalization, discretization with uniform grid and representation of points with two coordinates in text.
+
+### 3.2. Image representation
+
+Rendering ink as an image enables conveying different information about the underlying digital ink, with the a simple approach being rendering black strokes on white background. Alternatively, (Kag, 2023) proposed to render time information in image channels.
+
+An added complexity in representing images of handwriting is the varying size and dimensions. There are several solutions to account for these, including stretching the sample to square, rendering respecting the aspect ratio, writing the image in multiple lines (Bavishi et al., 2023), or using vision encoders that support arbitrary input image dimensions such as Pix2Struct (Lee et al., 2023) or NaViT (Dehghani et al., 2023).
+
+In our work we use the vanilla ViT as the most popular and standard vision encoder solution. We encode speed information in input color channels, and render the input ink in several lines. We describe each of those below, provide examples of components of the rendering in Fig. 3 and validate this choice in Section 4.5.3.
+
+**Rendering the time and distance information.** We can use the three available color channels to encode the writing direction and stroke order. To do so, we normalize the time information within the ink between 0 and 1. The example of such representation is shown in the left part of Fig. 3, and the appropriate expression is given below
+
+$$c^R_{i,j} = \frac{t_{i,j} - t_{0,0}}{\max t_{m,n}} \quad c^G_{i,j} = \frac{|dx_{i,j}|}{\max |dx_{m,n}|} \quad c^B_{i,j} = \frac{|dy_{i,j}|}{\max |dy_{m,n}|}$$
+
+(1)
+
+where tᵢ,ⱼ is the time value for the point j in stroke i and dxᵢ,ⱼ = xᵢ,ⱼ₊₁ − xᵢ,ⱼ. Distance in x and y brings additional information about the size of the step and together with time information the model can estimate the speed. They are normalized between 0 and 1 similar to the time information. An example of this time and distance representation is shown in Fig. 3.
+
+We show the importance of rendering both time and distance information in Section 4.5.3 where we compare it to rendering time information only in 3 color channels or using simple black-on-white rendering.
+
+**Rendering samples in multiple lines.** Since handwritten samples often have very skewed aspect ratio, rendering them in a single line on a fixed size image can often produce unreadable results. To account for this fact, they could be rendered on an image with aspect ratio 1 : X, which is then split horizontally and merged vertically to produce a single square image with multiple lines, see Fig. 3, far right. In our experiments, we use X = 2 and validate this choice in Section 4.5.3.
+
+**Figure 3. Examples of different rendering options.** Rendering options for color – black&white, time from Eq. 1 and time+distance from Eq. 1. Examples of rendering in one, two or four lines.
+
+### 3.3. Target representation
+
+There are multiple ways to represent the label of handwriting, that needs to be predicted (the target). Having Byte-Pair Encoding tokenization in VLMs allows for faster decoding, but can be suboptimal for recognition performance, where two similar inputs (ex. "hello" and "hallo") may correspond to two different sequences of tokens. This is especially true in case of non-vocabulary words recognition. This can be circumvented by training the model to predict the target label broken into visual blocks of interest - ex. letters in case of text, of LaTeX symbols in case of math recognition.
+
+To achieve this, in case of text recognition we use space-separated letters as the target label (ex. "h e l l o") to map visual elements (letters) to output tokens. For math expression recognition we don't use space separation as it allows a model to utilize knowledge about LaTeX syntax from pretraining. We validate this decision in Section 4.5.4.
+
+---
+
+## 4. Experiments
+
+We evaluate the proposed representation of online handwriting on two different VLMs and compare results to a series of baselines. In our experiments we find that the model can fall back to the image representation when the text representation of handwriting is too long. Through ablation studies we find the relative coordinate tokenizer, with text and speed rendering in images as the best-performing combination.
+
+### 4.1. Models
+
+As described in section 2, we use two main base model families, PaLI (Chen et al., 2023c) combining ViT vision encoder with mT5 text encoder-decoder, and PaLM-E (Driess et al., 2023), projecting ViT tokens into a PaLM (Anil et al., 2023) text decoder. For PaLI, we use ViT-B/16 vision encoder pretrained on JFT-300M (Sun et al., 2017) and mT5-base pretrained on Common Crawl-based dataset, totalling 700M params. For PaLM-E, we use ViT-B/16 vision encoder pretrained on CoCa (Yu et al., 2022) and PaLM 128M text decoder, totalling 500M params, pretrained on a mix of social media, webpages, books and Github (Anil et al., 2023).
+
+Additionally, results for LoRA-tuning reported in Table 4 are based on a 5B parameter model of the same architecture as PaLI (Chen et al., 2023b). In spite of not being directly comparable to our smaller models, these results showcase the effectiveness of our method when applied through parameter-efficient tuning on larger models, where fine-tuning becomes computationally expensive. It is for this same reason that fine-tuning experiments of these larger model are omitted in this paper.
+
+We compare our method to several baselines ranging from OCR models trained on private datasets to CTC transformer baseline which we train ourselves on the same public datasets.
+
+**State-of-the-art methods.** First, we compare to a publicly available OCR API (Google Cloud, 2023). For online handwriting recognition, we compare to (Carbune et al., 2020) which uses a 5M parameters LSTM encoder with a CTC decoder (Graves et al., 2006), combined with a character-based language model. Additionally, for the VNOnDB dataset, we report the results from 1) the best-performing method from VOHTR-2018 online handwriting recognition challenge (Nguyen et al., 2018) which is Vietnamese-specific and 2) the OCR results of Le et al. (2019).
+
+**Trained baselines.** We also compare the results to a Transformer encoder with a CTC decoder, similar to (Alwajih et al., 2022). We provide the architecture details in Appendix D.
+
+### 4.2. Datasets
+
+We train the models on the three public datasets – DeepWriting (Aksan et al., 2018), MathWriting (Gervais et al., 2024) and VNonDB (Nguyen et al., 2018). Dataset statistics are given in Table 2 and examples from each dataset are shown in Fig. 4.
+
+**Table 2. Dataset statistics.** For MathWriting, 630k training samples includes 230k real and 400k synthetic samples.
+
+| Dataset | Language | Samples | Mean target tokens |
+|---|---|---|---|
+| DeepWriting | English | 34k | 13 |
+| MathWriting | LaTeX | 630k | 15 |
+| VNOnDB | Vietnamese | 67k | 3 |
+
+**Figure 4. Examples from DeepWriting, MathWriting and VNonDB datasets.**
+
+### 4.3. Training and evaluation setup
+
+PaLI and PaLM-E models described in Section 4.1 are finetuned for 200k steps with 128 and 64 batch size respectively. CTC transformer is trained for 100k steps with 256 batch size. We use a context length 1024 for PaLI and 1500 for PaLM-E covering 95th percentile of sequence lengths in all validation datasets. These numbers differ between the two models due to different text tokenizers used in each, see details in Section 2. We use an additional 256 tokens coming from the ViT encoder on 224px image in case of PaLI and 288px in case of PaLM-E. During inference, we use greedy decoding with at most 64 tokens.
+
+For PaLI and PaLM-E, we train on a 80% MathWriting, 10% VNOnDB, 10% DeepWriting mixture of datasets (a distribution similar to proportion of the number of samples in each dataset) as our representation allows seamless mixing of tasks and it is beneficial for the model quality. We additionally report numbers when trained on all datasets separately in the AppendixB.
+
+Similar to most literature on the topic, we report the standard Character Error Rate (CER) metric (Michael et al., 2019). We report the mean and variance over three runs for all the methods that we train. In the case of MathWriting we calculate CER based on the dictionary of LaTeX tokens (see Appendix F). In cases where we use space-separated target representation, we remove the spaces before CER computation.
+
+### 4.4. Results
+
+Table 3 compares PaLI and PaLM-E models finetuned with our representation described in Section 3 (relative coordinates in text and speed rendering with two lines in image representation) to CTC transformer and state-of-the-art OCR and online handwriting recognition models. Our main conclusion from it is that performance of both VLMs finetuned for handwriting recognition is comparable to or better than state-of-the-art results. Furthermore, best results for each dataset are achieved with VLMs, with the exception of VNOnDB. For VNOnDB, the best performing model is, unlike all the other approaches, tailored to Vietnamese - it relies on specific handling of diacritics, Vietnamese-specific tokenizer, etc. We attribute the somewhat low performance of PaLM-E on Deepwriting to the small size of this dataset.
+
+Our proposed representation is useful in both fine-tuning and parameter-efficient tuning. As visible in Table 4, fine-tuning with the 700M parameter model yields better results than LoRA-tuning 5B parameter model. However, LoRA-tuning with our representation performs better than image-based methods from Table 3.
+
+**Table 3. Comparison of our approaches to state-of-the-art methods on three public datasets.** PaLI and PaLM-E are finetuned on relative coordinates in text and speed rendering in image representations. For VNonDB, DeepWriting we use space-separated target and for MathWriting targets are not space separated (see Sec. 4.5.4 for more details).
+
+|  |  |  |  | CER ↓ |  |  |
+|---|---|---|---|---|---|---|
+| Model | Training data | Language-specific | Input | MathWriting | VNOnDB | DeepWriting |
+| (Google Cloud, 2023) | Private | - | Image | 5.93 | 4.83 | 14.16 |
+| (Le et al., 2019) | Public | No | Image | - | 4.10 | - |
+| (Carbune et al., 2020) | Private | No | Ink | - | 4.13 | 6.14 |
+| MyScript(Nguyen et al., 2018) | Private | Yes | Ink | - | 2.91 | - |
+| CTC transformer | Public | No | Ink | 4.28 (0.06) | 3.82 (0.24) | 5.71 (0.2) |
+| PaLI [ours] | Public | No | Ink+Image | **4.47 (0.07)** | **3.04 (0.01)** | **4.39 (0.06)** |
+| PaLM-E [ours] |  |  |  | **4.19 (0.04)** | 3.27 (0.1) | 6.89 (0.06) |
+
+**Table 4. Comparison between finetuning the 700M PaLI and LoRA-tuning PaLI-5B with proposed ink+image representation.**
+
+|  |  | CER ↓ |  |  |
+|---|---|---|---|---|
+| Train setup | # Train. params | MathWriting | VNOnDB | DeepWriting |
+| Full | 700M | 4.47 (0.07) | 3.04 (0.01) | 4.39 (0.06) |
+| LoRA | 27M | 4.93 (0.08) | 3.61 (0.16) | 5.74 (0.17) |
+
+**Figure 5. PaLI recognition on four examples where prediction only on image or ink is different from the target.** We compare PaLI results to the ground truth from the MathWriting dataset. Mistakes include mixing similar characters like "tau" and "T", "d" and "a". We show that those mistakes are addressed by including ink representation.
+
+### 4.5. Ablation study
+
+In the following subsections we perform most of the ablation studies on the MathWriting dataset, which we chose due to its scale. We train PaLI for 100k steps in these experiments for shorter experiment cycles.
+
+#### 4.5.1. MULTIMODAL INPUT
+
+Experiments in Table 5 show how sequence and image representations perform in recognition training with VLMs and when it is beneficial to use them in the representation. We show examples of mistakes in image-only recognition and show how they are addressed with an additional ink modality Fig. 5. We draw several conclusions: (1) Combining both image and ink input yields better performance than when using only one of the input modalities. This is particularly visible in the case of PaLM-E. Our hypothesis is that, due to the longer sequence length from the different tokenization of numbers in PaLM-E (see Section 2), training only on ink becomes a more challenging task than in PaLI. In this case addition of image tokens significantly improves the quality of the final model. (2) The input image helps if the sequence representation of the ink exceeds the context length. We calculated that for the inks that exceed the sequence length CER goes down from 17.38 to 11.17 with an introduction of an image input for PaLI.
+
+**Table 5. Multimodality in PaLI and PaLM-E.** In addition, we compare PaLI with 1024 and 512 tokens to see how image helps when ink is too long for context length. PaLM-E has a specific number tokenization, described in Section 2 and requires a longer sequence length than PaLI. Ink and image representations are the same as in Table 3.
+
+|  |  | Seq. len |  | CER ↓ |
+|---|---|---|---|---|
+| Model | Input | Ink | Image | MathWriting |
+| PaLI | Image | - | 256 | 8.07 (0.14) |
+|  | Ink | 1024 | - | 4.64 (0.07) |
+|  |  | 512 | - | 10.65 (0.34) |
+|  | Ink + Image | 1024 | 256 | 4.55 (0.04) |
+|  |  | 512 | 256 | 5.89 (0.35) |
+| PaLM-E | Image | - | 256 | 4.87 (0.07) |
+|  | Ink | 1500 | - | 6.46 (0.02) |
+|  | Ink+Image | 1500 | 256 | 4.22 (0.16) |
+
+#### 4.5.2. INK TOKENIZATION
+
+In this ablation study we compare different approaches to tokenization from the Section 3.1. We compare them on the PaLI model with only sequence representation in order to evaluate the effect of tokenization without an influence from an image input. We draw the following main conclusions based on Table 6: (1) Representing ink with text or separate tokens yields similar performance to extendeding the vocabulary as long as the whole ink sequence fits into the model context and the dictionary is small. For the histogram-based tokenizer (similar to (Ribeiro et al., 2020), more details in the Appendix E), which uses a large dictionary, each index corresponds to several tokens when represented as text, resulting in worse performance; (2) Absolute and relative representation of the ink result in a similar recognition quality. This is also visible in Table 7. We have observed that this is dataset-specific, with English and Vietnamese recognition performing better with relative coordinates and Math recognition with absolute coordinates. We attribute this to the fact that relative representation is shift-invariant and is easier to learn, but for math expressions, which don't have a linear structure, absolute coordinates are more important.
+
+**Table 6. PaLI with different ink representations and no image input.** Models with extended dictionaries are compared to text representation of inks.
+
+|  |  | CER ↓ |
+|---|---|---|
+| Tokenization | Token type | MathWriting |
+| Relative | Text | 4.64 (0.07) |
+|  | Extended | 4.59 (0.08) |
+| Absolute | Text | 4.20 (0.02) |
+|  | Extended | 4.43 (0.04) |
+| (Ribeiro et al., 2020) | Text | 7.11 (0.08) |
+|  | Extended | 4.53 (0.04) |
+
+**Table 7. Absolute coordinates vs relative offsets for text representation combined with an image in the PaLI model.** Absolute representation performs 12% worse on DeepWriting and 4% on VNOnDB.
+
+|  | CER ↓ |  |  |
+|---|---|---|---|
+| Tokenization | MathWriting | VNOnDB | DeepWriting |
+| Relative | 4.55 (0.04) | 4.55 (0.09) | 4.68 (0.16) |
+| Absolute | 4.37 (0.04) | 4.72 (0.0) | 5.23 (0.1) |
+
+#### 4.5.3. IMAGE RENDERING
+
+In the following ablation study we compare three different types of color rendering – black&white, time and time+distance; see examples in Fig. 3. We focus our attention specifically on time information as it is a distinguishing feature of online handwriting recognition task. From Table 8 we draw the conclusion that time and distance information in color channels both contribute to a better performance. In Appendix C we present an example of how writing order helps with recognition of an ambiguous ink.
+
+We then explore in Table 8 the optimal number of lines for rendering. Rendering in multiple lines allows to control the size of writing, which can be small if an ink is rendered in one line (see Fig. 3) or in too many lines. We find that two lines is optimal for MathWriting dataset which has a median aspect ratio of 2.29. We conclude that the number of lines closest to average aspect ratio in the dataset performs the best.
+
+**Table 8. Different rendering options w.r.t. rendering with color and in multiple lines for PaLI model.** Measured with only image input to estimate the effect of image representation without an influence of ink representation. Examples of all options that we evaluate are shown in Fig. 3.
+
+|  | Color |  | CER ↓ |
+|---|---|---|---|
+| Time | Distance | # Lines | MathWriting |
+| No | No | 2 | 13.93 (4.34) |
+| Yes | No | 2 | 11.36 (1.49) |
+| Yes | Yes | 2 | 8.07 (0.14) |
+| Yes | Yes | 1 | 11.15 (1.69) |
+| Yes | Yes | 2 | 8.07 (0.14) |
+| Yes | Yes | 4 | 14.94 (1.81) |
+
+#### 4.5.4. TARGET REPRESENTATION
+
+In Table 9 we show that space-separation of the target improves handwriting text recognition but performs poorly on mathematical expression recognition. The gap in performance on DeepWriting is especially big as this dataset contains many non-vocabulary words like "clearl" in Fig. 4. In case of MathWriting we obtain much better results without space interleaving as it allows the model to utilize knowledge about LaTeX syntax from pretraining.
+
+**
+
+**Table 9. Comparison on space interleaving in target on PaLI relative ink+image.** This target representation performs well on VNOnDB and DeepWriting datasets but decreases the quality on MathWriting where multiple characters in the target frequently represents one symbol in ink.
+
+|  | CER ↓ |  |  |
+|---|---|---|---|
+| Spaces | MathWriting | VNOnDB | DeepWriting |
+| Yes | 11.03 (0.36) | 4.55 (0.09) | 4.68 (0.16) |
+| No | 4.55 (0.04) | 5.02 (0.26) | 22.3 (1.79) |
+
+---
+
+## 5. Related work
+
+The **online handwriting recognition** has a long history, and ink representation plays an important role in any recognition model. In early works inks were represented as aggregations of geometric features like direction, distances, curvatures, etc described in (Jaeger et al., 2003). With more complex machine learning systems, manual feature engineering became unnecessary as models with sufficient data can learn relevant features from raw representations, for instance in computer vision (Krizhevsky et al., 2012) and in NLP (Mikolov et al., 2013).
+
+One of the main challenges in online handwriting recognition is aligning the input ink with the target text as they have different lengths. Historically, Hidden Markov Models were used for this task (Hu et al., 1996). They were subsequently replaced by deep neural networks like LSTMs (Hochreiter & Schmidhuber, 1997) and Transformers (Vaswani et al., 2017) with connectionist temporal classification (CTC) loss. This solution was initially proposed for speech recognition in (Graves et al., 2006) and it trains the segmentation and classification together. Another approach is to use the encoder-decoder model (also known as seq2seq) where an encoder produces a sequence of states based on the input and an autoregressive decoder uses those states in cross-attention. This method has been widely adopted in speech recognition in recent years (Prabhavalkar et al., 2017; Pundak et al., 2018; Chiu et al., 2017; Hannun et al., 2014). Similarly, decoder-only models like PaLM (Anil et al., 2023) can be adopted to speech recognition (Rubenstein et al., 2023). In offline handwriting recognition the input is a scanned image or a photo of handwriting and the output is digital text. Modern approaches to offline handwriting recognition are mainly based on deep neural nets according to a survey on handwritten OCR (Al Sayed et al., 2022).
+
+The idea to combine online and offline recognition has been explored before in (Wang et al., 2019), which proposed a special variation of encoder-decoder architecture to combine sequence data and image representation. A similar idea for sketch generation was investigated in (Pourreza et al., 2023) where the image representation was merged with an LLM using a cross-attention mechanism.
+
+In recent years Large Language Models have demonstrated impressive capabilities in various tasks like question answering, math problem solving, summarization etc. (Anil et al., 2023; Brown et al., 2020; Xue et al., 2021). Recognizing the limitations of text-only models, researchers are now exploring how integrating different modalities like vision can unlock even greater capabilities for large language models. The main goal of this expansion is to have a universal model (Bommasani et al., 2022) that can be easily adapted to a variety of tasks like image captioning (Zhou et al., 2019), speech translation (Huang et al., 2023) and many more. The models that combine visual and language components (Large Visual Language Models) include Flamingo (Alayrac et al., 2022), PaLI (Chen et al., 2023c;a), PaLM-E (Driess et al., 2023), LLaVA (Liu et al., 2023). Those models vary in size and training datasets, but most notably in architectural approaches to combining image and text modalities. In Flamingo gated cross-attention was used to connect language and image modalities. PaLI expands the encoder state with image embeddings and utilizes cross-attention in an encoder-decoder to process images and text together. PaLM-E and LLaVA models rely on self-attention as they fuse projected image embeddings into the sequence of text tokens.
+
+**Our work** We argue that VLMs provide a natural framework to combine online and offline representations of digital inks. Unlike (Wang et al., 2019) we utilize already existing VLMs for easier processing of both ink sequences and images. Our method is focused on finding text and image representations that work best with VLMs.
+
+---
+
+## 6. Conclusion
+
+In this work, we provide a representation of handwriting for VLMs as a text sequence and an image that enables tuning VLMs to a quality comparable to state of the art on three public datasets. Our representation includes relative discretized coordinates as text and rendered ink with time and distance information as image.
+
+We show that (1) VLMs profit from multimodal inputs and that the image is particularly important in cases where the ink's text representation doesn't fit into context length (2) multiple handwriting tasks can be combined with this representation and (3) it is compatible with parameter-efficient tuning as well as fine-tuning. This points us to a future direction of exploring different handwriting task combinations in large VLMs.
+
+---
+
+## 7. Impact Statement
+
+This paper presents work whose goal is to advance the field of Machine Learning. There are many potential societal consequences of our work, none which we feel must be specifically highlighted here.
+
+---
+
+## 8. Acknowledgements
+
+We would like to thank Philippe Gervais, Sean Kirmani, Henry Rowley, Blagoj Mitrevski, Arina Rak, Julian Schnitzler, Chengkun Li, Vincent Etter for their helpful suggestions.
+
+---
+
+## References
+
+Kaggle Quick, Draw! competition. https://www.kaggle.com/competitions/quickdraw-doodle-recognition, 2023. [Online; accessed 10-Jan-2024].
+
+Aksan, E., Pece, F., and Hilliges, O. Deepwriting: Making digital ink editable via deep generative modeling. In Proceedings of the 2018 CHI conference on human factors in computing systems, pp. 1–14, 2018.
+
+Al Sayed, I., Mawlod, A., Alnajjar, A., and Gheni, H. Survey on handwritten recognition. pp. 273
