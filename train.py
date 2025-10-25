@@ -5,6 +5,7 @@ from transformers import AutoProcessor, PaliGemmaForConditionalGeneration, get_s
 from peft import LoraConfig, get_peft_model
 from data_preprocessing import MathWritingDataset, LaTeXTokenizer
 import os
+import shutil
 from tqdm import tqdm
 
 class MathTrainer:
@@ -182,26 +183,26 @@ class MathTrainer:
         return avg_loss, avg_cer
     
     def save_checkpoint(self, epoch, metric_name=None, metric_value=None):
-        """Save LoRA weights and optionally full checkpoint with metrics."""
-        # Save LoRA adapters
+        """Save LoRA weights. For best checkpoints, copy to a dedicated best folder."""
+        # Save LoRA adapters (regular checkpoint)
         save_path = os.path.join(self.output_dir, f"lora_epoch_{epoch}")
         self.model.save_pretrained(save_path)
+        print(f"Checkpoint saved: {save_path}")
         
-        # If this is a best checkpoint, also save full state dict with metrics
+        # If this is a best checkpoint, copy the LoRA folder with descriptive name
         if metric_name is not None and metric_value is not None:
-            checkpoint = {
-                'epoch': epoch,
-                'model_state_dict': self.model.state_dict(),
-                metric_name: metric_value,
-            }
-            checkpoint_path = os.path.join(
+            best_path = os.path.join(
                 self.output_dir, 
-                f"best_epoch{epoch}_{metric_name}{metric_value:.4f}.pt"
+                f"best_lora_epoch_{epoch}_{metric_name}_{metric_value:.4f}"
             )
-            torch.save(checkpoint, checkpoint_path)
-            print(f"Best checkpoint saved: {checkpoint_path}")
-        else:
-            print(f"Checkpoint saved: {save_path}")
+            
+            # Copy the LoRA checkpoint to best location
+            if os.path.exists(best_path):
+                shutil.rmtree(best_path)  # Remove old best if exists
+            shutil.copytree(save_path, best_path)
+            
+            print(f"✨ Best checkpoint copied to: {best_path}")
+            print(f"   (LoRA adapters only, ~27M params instead of full ~3B model)")
 
 
 if __name__ == "__main__":
