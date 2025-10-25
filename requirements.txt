@@ -1,0 +1,12 @@
+# Core dependencies
+torch>=2.0.0
+transformers>=4.40.0
+peft>=0.8.0
+
+# Optional: GPU-optimized quantization (recommended for RUBIK Pi)
+bitsandbytes>=0.41.0
+
+# Alternative quantization options (uncomment as needed):
+# optimum>=1.16.0  # HuggingFace Optimum for GPTQ/AWQ
+# onnxruntime-gpu>=1.16.0  # ONNX Runtime for cross-platform
+

@@ -73,7 +73,7 @@ class MathTrainer:
             batch_size=batch_size,
             shuffle=True,
             collate_fn=self.collate_fn,
-            num_workers=0
+            num_workers=4
         )
         
         valid_loader = DataLoader(
@@ -81,7 +81,7 @@ class MathTrainer:
             batch_size=batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,
-            num_workers=0
+            num_workers=4
         )
         
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
@@ -99,6 +99,7 @@ class MathTrainer:
         
         self.model.train()
         global_step = 0
+        best_cer = float('inf')
         
         for epoch in range(epochs):
             print(f"\n{'='*60}")
@@ -129,12 +130,17 @@ class MathTrainer:
             avg_loss = epoch_loss / len(train_loader)
             print(f"\nEpoch {epoch+1} - Avg Loss: {avg_loss:.4f}")
             
-            # Validation
-            if (epoch + 1) % 2 == 0:
-                val_loss = self.validate(valid_loader)
-                print(f"Validation Loss: {val_loss:.4f}")
+            # Validation every epoch
+            val_loss, val_cer = self.validate(valid_loader)
+            print(f"Validation Loss: {val_loss:.4f}, CER: {val_cer:.4f}")
             
-            # Save checkpoint
+            # Track and save best model based on CER
+            if val_cer < best_cer:
+                print(f"🎉 New best CER! {best_cer:.4f} -> {val_cer:.4f}")
+                best_cer = val_cer
+                self.save_checkpoint(epoch + 1, metric_name='cer', metric_value=val_cer)
+            
+            # Save periodic checkpoint
             if (epoch + 1) % 5 == 0:
                 self.save_checkpoint(epoch + 1)
         
@@ -173,13 +179,29 @@ class MathTrainer:
         avg_cer = total_cer / num_samples if num_samples > 0 else 0
         
         print(f"  Validation CER: {avg_cer:.4f}")
-        return avg_loss
+        return avg_loss, avg_cer
     
-    def save_checkpoint(self, epoch):
-        """Save LoRA weights."""
+    def save_checkpoint(self, epoch, metric_name=None, metric_value=None):
+        """Save LoRA weights and optionally full checkpoint with metrics."""
+        # Save LoRA adapters
         save_path = os.path.join(self.output_dir, f"lora_epoch_{epoch}")
         self.model.save_pretrained(save_path)
-        print(f"Checkpoint saved: {save_path}")
+        
+        # If this is a best checkpoint, also save full state dict with metrics
+        if metric_name is not None and metric_value is not None:
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': self.model.state_dict(),
+                metric_name: metric_value,
+            }
+            checkpoint_path = os.path.join(
+                self.output_dir, 
+                f"best_epoch{epoch}_{metric_name}{metric_value:.4f}.pt"
+            )
+            torch.save(checkpoint, checkpoint_path)
+            print(f"Best checkpoint saved: {checkpoint_path}")
+        else:
+            print(f"Checkpoint saved: {save_path}")
 
 
 if __name__ == "__main__":

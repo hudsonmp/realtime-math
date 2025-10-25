@@ -367,6 +367,23 @@ class MathWritingDataset(Dataset):
             raise RuntimeError(f"Unexpected error processing {os.path.basename(file_path)}: {e}")
 
 
+def collate_fn(batch):
+    """
+    Custom collate function for batching variable-length string fields.
+    
+    Args:
+        batch: List of dicts from MathWritingDataset, each containing
+               'stroke_text' and 'label' as strings.
+    
+    Returns:
+        Dict with 'stroke_text' and 'label' as lists of strings.
+    """
+    return {
+        'stroke_text': [item['stroke_text'] for item in batch],
+        'label': [item['label'] for item in batch]
+    }
+
+
 def create_dataloaders(data_dir, batch_size=8, num_workers=0):
     """Create train/valid/test DataLoaders."""
     train_ds = MathWritingDataset(data_dir, split='train')
@@ -374,11 +391,14 @@ def create_dataloaders(data_dir, batch_size=8, num_workers=0):
     test_ds = MathWritingDataset(data_dir, split='test')
     
     train_loader = DataLoader(train_ds, batch_size=batch_size, 
-                             shuffle=True, num_workers=num_workers)
+                             shuffle=True, num_workers=num_workers,
+                             collate_fn=collate_fn)
     valid_loader = DataLoader(valid_ds, batch_size=batch_size, 
-                             shuffle=False, num_workers=num_workers)
+                             shuffle=False, num_workers=num_workers,
+                             collate_fn=collate_fn)
     test_loader = DataLoader(test_ds, batch_size=batch_size, 
-                            shuffle=False, num_workers=num_workers)
+                            shuffle=False, num_workers=num_workers,
+                            collate_fn=collate_fn)
     
     return train_loader, valid_loader, test_loader
 
