@@ -38,8 +38,8 @@ class PreprocessingVisualizer:
         self.spatial_normalized = self.normalizer.normalize_spatial(self.resampled_strokes)
         self.discretized_strokes = self.normalizer.discretize(self.spatial_normalized)
         
-        # Generate text representation
-        self.text_representation = self.strokes_to_text(self.discretized_strokes)
+        # Generate text representation using normalizer's method
+        self.text_representation = self.normalizer.strokes_to_text(self.discretized_strokes)
         
         print("✓ Pipeline complete!")
         
@@ -56,18 +56,6 @@ class PreprocessingVisualizer:
         # Setup figure
         self.setup_figure()
     
-    def strokes_to_text(self, strokes):
-        """
-        Convert discretized strokes to text representation.
-        Following paper: "<stroke> x y x y ... <stroke> x y x y ..."
-        """
-        tokens = []
-        for stroke in strokes:
-            tokens.append("<stroke>")
-            for point in stroke:
-                x, y = int(point[0]), int(point[1])
-                tokens.append(f"{x} {y}")
-        return " ".join(tokens)
     
     def setup_figure(self):
         """Create the interactive visualization."""
@@ -282,11 +270,12 @@ class PreprocessingVisualizer:
    ✓ VLM-compatible (text format)
    ✓ Aspect ratio preserved (no distortion)
 
-📝 NEXT STEPS:
-   → Apply BPE tokenization (model-specific)
-   → Build LaTeX tokenizer for target labels
-   → Create PyTorch Dataset class
-   → Fine-tune PaLI with LoRA
+📝 READY FOR TRAINING:
+   ✓ Data preprocessing complete
+   ✓ PyTorch Dataset ready
+   ✓ Training script: train.py
+   → Run: python train.py (requires A100 GPU)
+   → Export: python export_model.py
 """
         
         self.info_ax.text(0.5, 0.5, info_text, 

@@ -97,13 +97,13 @@ Core packages needed:
 
 ### To-dos
 
-- [ ] Create requirements.txt with PyTorch, numpy, lxml, matplotlib, and other dependencies
-- [ ] Implement InkML parser to extract strokes and labels from XML files
-- [ ] Build stroke tokenizer with normalization, discretization, and vocabulary
-- [ ] Create LaTeX tokenizer and build vocabulary from training labels
-- [ ] Implement PyTorch Dataset and DataLoader for efficient batch processing
-- [ ] Build encoder-decoder transformer architecture with positional encodings
-- [ ] Implement training loop with loss, optimizer, and learning rate scheduling
-- [ ] Add evaluation metrics (accuracy, CER, edit distance) and validation loop
-- [ ] Create visualization tools to render strokes and display predictions
+- [x] Create requirements.txt with PyTorch, numpy, lxml, matplotlib, and other dependencies
+- [x] Implement InkML parser to extract strokes and labels from XML files
+- [x] Build stroke tokenizer with normalization, discretization, and vocabulary
+- [x] Create LaTeX tokenizer and build vocabulary from training labels
+- [x] Implement PyTorch Dataset and DataLoader for efficient batch processing
+- [x] Build encoder-decoder transformer architecture with positional encodings
+- [x] Implement training loop with loss, optimizer, and learning rate scheduling
+- [x] Add evaluation metrics (accuracy, CER, edit distance) and validation loop
+- [x] Create visualization tools to render strokes and display predictions
 - [ ] Implement model export to ONNX/TorchScript for deployment

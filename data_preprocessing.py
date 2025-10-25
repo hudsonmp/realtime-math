@@ -4,6 +4,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 import torch
+import warnings
+import re
 
 #Passed evals
 class InkMLParser:
@@ -211,6 +213,174 @@ class StrokeNormalizer:
         discretized_strokes = self.discretize(spatial_normalized)
         
         return discretized_strokes
+    
+    def strokes_to_text(self, strokes):
+        """Convert discretized strokes to text: '<stroke> x y x y ...'"""
+        tokens = []
+        for stroke in strokes:
+            tokens.append("<stroke>")
+            for point in stroke:
+                tokens.append(f"{int(point[0])} {int(point[1])}")
+        return " ".join(tokens)
+
+
+class LaTeXTokenizer:
+    """Tokenize LaTeX for evaluation (CER calculation)."""
+    
+    def __init__(self):
+        # Common LaTeX commands (from paper Appendix F)
+        self.latex_pattern = re.compile(
+            r'\\[a-zA-Z]+|'  # \frac, \sqrt, \alpha, etc.
+            r'[{}()[\]^_=+\-*/|<>]|'  # Special chars
+            r'[a-zA-Z0-9]|'  # Alphanumeric
+            r'\s+'  # Whitespace
+        )
+    
+    def tokenize(self, latex_string):
+        """Tokenize LaTeX string into tokens."""
+        if not latex_string:
+            return []
+        tokens = self.latex_pattern.findall(latex_string)
+        return [t for t in tokens if t.strip()]
+    
+    def compute_cer(self, predicted, target):
+        """Compute Character Error Rate between predicted and target LaTeX."""
+        pred_tokens = self.tokenize(predicted)
+        target_tokens = self.tokenize(target)
+        
+        # Levenshtein distance at token level
+        m, n = len(pred_tokens), len(target_tokens)
+        if n == 0:
+            return 0.0 if m == 0 else 1.0
+        
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        
+        for i in range(m + 1):
+            dp[i][0] = i
+        for j in range(n + 1):
+            dp[0][j] = j
+        
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if pred_tokens[i-1] == target_tokens[j-1]:
+                    dp[i][j] = dp[i-1][j-1]
+                else:
+                    dp[i][j] = 1 + min(
+                        dp[i-1][j],    # deletion
+                        dp[i][j-1],    # insertion
+                        dp[i-1][j-1]   # substitution
+                    )
+        
+        return dp[m][n] / n
+
+
+class MathWritingDataset(Dataset):
+    """PyTorch Dataset for MathWriting InkML files."""
+    
+    def __init__(self, data_dir, split='train', target_points=16, N=224):
+        """
+        Args:
+            data_dir: Base directory (e.g., "mathwriting-2024-excerpt")
+            split: 'train', 'valid', 'test', or 'symbols'
+            target_points: Points per stroke after resampling
+            N: Normalization range [0, N]
+        """
+        self.data_dir = data_dir
+        self.split = split
+        
+        split_path = os.path.join(data_dir, split)
+        if not os.path.exists(split_path):
+            raise ValueError(f"Split directory not found: {split_path}")
+        
+        # Find all potential files
+        all_files = sorted(glob.glob(os.path.join(split_path, "*.inkml")))
+        if len(all_files) == 0:
+            raise ValueError(f"No .inkml files found in {split_path}")
+        
+        self.parser = InkMLParser()
+        self.normalizer = StrokeNormalizer(target_points_per_stroke=target_points, N=N)
+        
+        # Pre-validate all files and keep only valid ones
+        print(f"Validating {len(all_files)} files in {split} split...")
+        self.files = self._validate_files(all_files)
+        
+        if len(self.files) == 0:
+            raise ValueError(f"No valid .inkml files found in {split_path}")
+        
+        invalid_count = len(all_files) - len(self.files)
+        if invalid_count > 0:
+            warnings.warn(f"Skipped {invalid_count}/{len(all_files)} invalid files in {split} split")
+        print(f"Loaded {len(self.files)} valid files for {split} split")
+        
+    def _validate_files(self, file_list):
+        """
+        Pre-validate all files and return only those that can be processed.
+        
+        Args:
+            file_list: List of file paths to validate
+            
+        Returns:
+            List of valid file paths
+        """
+        valid_files = []
+        
+        for file_path in file_list:
+            try:
+                # Try to parse and process the file
+                strokes, label = self.parser.parse_file(file_path)
+                
+                # Check required fields
+                if label is None:
+                    raise ValueError("Missing normalizedLabel")
+                if len(strokes) == 0:
+                    raise ValueError("No strokes found")
+                
+                # Try normalization to ensure it works
+                normalized = self.normalizer.normalize(strokes)
+                _ = self.normalizer.strokes_to_text(normalized)
+                
+                # If we got here, the file is valid
+                valid_files.append(file_path)
+                
+            except Exception as e:
+                # Silently skip invalid files (summary reported in __init__)
+                pass
+        
+        return valid_files
+    
+    def __len__(self):
+        return len(self.files)
+    
+    def __getitem__(self, idx):
+        """Return dict with 'stroke_text' and 'label'."""
+        file_path = self.files[idx]
+        
+        try:
+            strokes, label = self.parser.parse_file(file_path)
+            normalized = self.normalizer.normalize(strokes)
+            stroke_text = self.normalizer.strokes_to_text(normalized)
+            
+            return {'stroke_text': stroke_text, 'label': label}
+            
+        except Exception as e:
+            # This should rarely happen since files are pre-validated
+            raise RuntimeError(f"Unexpected error processing {os.path.basename(file_path)}: {e}")
+
+
+def create_dataloaders(data_dir, batch_size=8, num_workers=0):
+    """Create train/valid/test DataLoaders."""
+    train_ds = MathWritingDataset(data_dir, split='train')
+    valid_ds = MathWritingDataset(data_dir, split='valid')
+    test_ds = MathWritingDataset(data_dir, split='test')
+    
+    train_loader = DataLoader(train_ds, batch_size=batch_size, 
+                             shuffle=True, num_workers=num_workers)
+    valid_loader = DataLoader(valid_ds, batch_size=batch_size, 
+                             shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, 
+                            shuffle=False, num_workers=num_workers)
+    
+    return train_loader, valid_loader, test_loader
 
 
 # Test the implementation
@@ -296,6 +466,61 @@ if __name__ == "__main__":
     print(f"  ✓ Total unique x values: {len(np.unique(all_x_norm))}")
     print(f"  ✓ Total unique y values: {len(np.unique(all_y_norm))}")
     
+    # Test text conversion
+    print(f"\n{'TEXT REPRESENTATION:':-^70}")
+    text_output = normalizer.strokes_to_text(normalized_strokes)
+    tokens = text_output.split()
+    print(f"  Format: '<stroke> x y x y ...'")
+    print(f"  Total tokens: {len(tokens)}")
+    print(f"  First 20 tokens: {' '.join(tokens[:20])}...")
+    print(f"  Text length: {len(text_output)} characters")
+    
     print(f"\n{'='*70}")
-    print("✓ Full normalization pipeline working correctly!")
+    print("✓ Full pipeline working correctly!")
+    print("="*70)
+    
+    # Test LaTeX Tokenizer
+    print(f"\n{'='*70}")
+    print("Testing LaTeX Tokenizer")
+    print("="*70)
+    
+    tokenizer = LaTeXTokenizer()
+    
+    test_cases = [
+        ("x^2", "x^2"),
+        ("\\frac{a}{b}", "\\frac{a}{b}"),
+        ("x^2", "x^3"),  # Different
+        ("\\sqrt{2}", "\\sqrt{2}"),
+    ]
+    
+    for pred, target in test_cases:
+        tokens_pred = tokenizer.tokenize(pred)
+        tokens_target = tokenizer.tokenize(target)
+        cer = tokenizer.compute_cer(pred, target)
+        print(f"\n  Pred: {pred} → {tokens_pred}")
+        print(f"  Target: {target} → {tokens_target}")
+        print(f"  CER: {cer:.3f}")
+    
+    print(f"\n✓ LaTeX tokenizer working!")
+    
+    # Test Dataset
+    print(f"\n{'='*70}")
+    print("Testing MathWritingDataset")
+    print("="*70)
+    
+    try:
+        dataset = MathWritingDataset("mathwriting-2024-excerpt", split="test")
+        print(f"\n✓ Dataset loaded: {len(dataset)} samples")
+        
+        sample = dataset[0]
+        print(f"\n✓ Sample 0:")
+        print(f"  Label: {sample['label']}")
+        print(f"  LaTeX tokens: {tokenizer.tokenize(sample['label'])}")
+        print(f"  Stroke text length: {len(sample['stroke_text'])} chars")
+        print(f"  First 100 chars: {sample['stroke_text'][:100]}...")
+        
+        print(f"\n✓ Dataset class working correctly!")
+    except Exception as e:
+        print(f"\n✗ Dataset test failed: {e}")
+    
     print("="*70)
