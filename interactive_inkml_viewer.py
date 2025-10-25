@@ -318,7 +318,7 @@ Average Points/Stroke: {total_points/num_strokes:.1f}
 
 def main():
     """Main function to run the interactive viewer."""
-    file_path = '/Users/hudsonmitchell-pullman/realtime-math-1/mathwriting-2024-excerpt/train/03c3977784c8f56c.inkml'
+    file_path = '/Users/hudsonmitchell-pullman/realtime-math/mathwriting-2024-excerpt/train/03c3977784c8f56c.inkml'
     print("=" * 60)
     print("🎨 Interactive InkML Viewer")
     print("=" * 60)
