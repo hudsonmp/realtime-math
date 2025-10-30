@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 import warnings
 import re
+from PIL import Image
 
 #Passed evals
 class InkMLParser:
@@ -224,6 +225,182 @@ class StrokeNormalizer:
         return " ".join(tokens)
 
 
+class InkRenderer:
+    """
+    Render normalized strokes as images with time and distance information.
+    Following paper Section 3.2 - Image representation.
+    """
+    
+    def __init__(self, image_size=224, num_lines=2):
+        """
+        Args:
+            image_size: Output image size (default 224 for ViT)
+            num_lines: Number of lines to render (paper uses 2 for 2:1 aspect ratio)
+        """
+        self.image_size = image_size
+        self.num_lines = num_lines
+        
+    def render(self, strokes):
+        """
+        Render normalized strokes to RGB image with time and distance encoding.
+        
+        Following paper Equation 1:
+        - Red channel: normalized time within the ink
+        - Green channel: normalized |dx| (horizontal movement)
+        - Blue channel: normalized |dy| (vertical movement)
+        
+        Args:
+            strokes: List of normalized numpy arrays, each shape (n_points, 3) with [x, y, t]
+            
+        Returns:
+            PIL.Image: RGB image of size (image_size, image_size)
+        """
+        if len(strokes) == 0:
+            # Return blank white image if no strokes
+            return Image.new('RGB', (self.image_size, self.image_size), (255, 255, 255))
+        
+        # Step 1: Calculate time and distance information for all points
+        all_points = []
+        all_times = []
+        all_dx = []
+        all_dy = []
+        
+        for stroke in strokes:
+            for i in range(len(stroke)):
+                x, y, t = stroke[i]
+                all_points.append((x, y))
+                all_times.append(t)
+                
+                # Calculate dx, dy for this point
+                if i > 0:
+                    dx = stroke[i, 0] - stroke[i-1, 0]
+                    dy = stroke[i, 1] - stroke[i-1, 1]
+                else:
+                    dx, dy = 0, 0  # First point of stroke has no previous point
+                
+                all_dx.append(abs(dx))
+                all_dy.append(abs(dy))
+        
+        # Step 2: Normalize time, dx, dy to [0, 1] for color channels
+        all_times = np.array(all_times)
+        all_dx = np.array(all_dx)
+        all_dy = np.array(all_dy)
+        
+        t_min, t_max = all_times.min(), all_times.max()
+        if t_max > t_min:
+            normalized_times = (all_times - t_min) / (t_max - t_min)
+        else:
+            normalized_times = np.zeros_like(all_times)
+        
+        max_dx = all_dx.max()
+        if max_dx > 0:
+            normalized_dx = all_dx / max_dx
+        else:
+            normalized_dx = np.zeros_like(all_dx)
+        
+        max_dy = all_dy.max()
+        if max_dy > 0:
+            normalized_dy = all_dy / max_dy
+        else:
+            normalized_dy = np.zeros_like(all_dy)
+        
+        # Step 3: Render to image with multi-line support
+        if self.num_lines == 1:
+            # Simple single-line rendering
+            return self._render_single_line(all_points, normalized_times, normalized_dx, normalized_dy)
+        else:
+            # Multi-line rendering (paper uses 2 lines)
+            return self._render_multiline(all_points, normalized_times, normalized_dx, normalized_dy)
+    
+    def _render_single_line(self, points, times, dx, dy):
+        """Render ink in a single line (stretch to fill image)."""
+        # Create blank white canvas
+        canvas = np.ones((self.image_size, self.image_size, 3), dtype=np.float32)
+        
+        # Draw each point with its color encoding
+        for i, (x, y) in enumerate(points):
+            # Convert coordinates to image space
+            img_x = int(x)
+            img_y = int(y)
+            
+            # Ensure within bounds
+            if 0 <= img_x < self.image_size and 0 <= img_y < self.image_size:
+                # Set color: R=time, G=dx, B=dy
+                canvas[img_y, img_x, 0] = times[i]  # Red channel
+                canvas[img_y, img_x, 1] = dx[i]     # Green channel
+                canvas[img_y, img_x, 2] = dy[i]     # Blue channel
+        
+        # Convert to 0-255 range and create PIL Image
+        canvas = (canvas * 255).astype(np.uint8)
+        return Image.fromarray(canvas, mode='RGB')
+    
+    def _render_multiline(self, points, times, dx, dy):
+        """
+        Render ink in multiple lines for better aspect ratio handling.
+        Following paper: render with aspect ratio 1:X, then split and stack.
+        """
+        # Calculate bounding box
+        if len(points) == 0:
+            return Image.new('RGB', (self.image_size, self.image_size), (255, 255, 255))
+        
+        points_array = np.array(points)
+        x_coords = points_array[:, 0]
+        y_coords = points_array[:, 1]
+        
+        x_min, x_max = x_coords.min(), x_coords.max()
+        y_min, y_max = y_coords.min(), y_coords.max()
+        
+        width = x_max - x_min
+        height = y_max - y_min
+        
+        # Create wide canvas (aspect ratio num_lines:1)
+        canvas_width = self.image_size * self.num_lines
+        canvas_height = self.image_size
+        canvas = np.ones((canvas_height, canvas_width, 3), dtype=np.float32)
+        
+        # Scale points to fit in wide canvas
+        if width > 0 and height > 0:
+            scale = min((canvas_width - 10) / width, (canvas_height - 10) / height)
+        else:
+            scale = 1.0
+        
+        # Draw each point
+        for i, (x, y) in enumerate(points):
+            # Scale and center in wide canvas
+            img_x = int((x - x_min) * scale + 5)
+            img_y = int((y - y_min) * scale + 5)
+            
+            # Ensure within bounds
+            if 0 <= img_x < canvas_width and 0 <= img_y < canvas_height:
+                # Set color with line width for visibility
+                for dy_offset in range(-1, 2):
+                    for dx_offset in range(-1, 2):
+                        px = img_x + dx_offset
+                        py = img_y + dy_offset
+                        if 0 <= px < canvas_width and 0 <= py < canvas_height:
+                            canvas[py, px, 0] = times[i]  # Red channel
+                            canvas[py, px, 1] = dx[i]     # Green channel
+                            canvas[py, px, 2] = dy[i]     # Blue channel
+        
+        # Split into multiple lines and stack vertically
+        line_width = self.image_size
+        lines = []
+        for i in range(self.num_lines):
+            start_x = i * line_width
+            end_x = start_x + line_width
+            line = canvas[:, start_x:end_x, :]
+            lines.append(line)
+        
+        # Stack lines vertically
+        final_canvas = np.vstack(lines)
+        
+        # Resize to square output
+        final_image = Image.fromarray((final_canvas * 255).astype(np.uint8), mode='RGB')
+        final_image = final_image.resize((self.image_size, self.image_size), Image.LANCZOS)
+        
+        return final_image
+
+
 class LaTeXTokenizer:
     """Tokenize LaTeX for evaluation (CER calculation)."""
     
@@ -299,6 +476,7 @@ class MathWritingDataset(Dataset):
         
         self.parser = InkMLParser()
         self.normalizer = StrokeNormalizer(target_points_per_stroke=target_points, N=N)
+        self.renderer = InkRenderer(image_size=N, num_lines=2)
         
         # Pre-validate all files and keep only valid ones
         print(f"Validating {len(all_files)} files in {split} split...")
@@ -352,15 +530,20 @@ class MathWritingDataset(Dataset):
         return len(self.files)
     
     def __getitem__(self, idx):
-        """Return dict with 'stroke_text' and 'label'."""
+        """Return dict with 'stroke_text', 'image', and 'label'."""
         file_path = self.files[idx]
         
         try:
             strokes, label = self.parser.parse_file(file_path)
             normalized = self.normalizer.normalize(strokes)
             stroke_text = self.normalizer.strokes_to_text(normalized)
+            image = self.renderer.render(normalized)
             
-            return {'stroke_text': stroke_text, 'label': label}
+            return {
+                'stroke_text': stroke_text,
+                'image': image,
+                'label': label
+            }
             
         except Exception as e:
             # This should rarely happen since files are pre-validated

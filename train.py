@@ -42,13 +42,15 @@ class MathTrainer:
         self.latex_tokenizer = LaTeXTokenizer()
         
     def collate_fn(self, batch):
-        """Custom collate for variable-length text sequences."""
+        """Custom collate for variable-length text sequences and images."""
         stroke_texts = [item['stroke_text'] for item in batch]
+        images = [item['image'] for item in batch]  # PIL Images from renderer
         labels = [item['label'] for item in batch]
         
-        # Tokenize inputs (stroke text)
+        # Tokenize inputs (stroke text + images) - PaliGemma expects both!
         inputs = self.processor(
             text=stroke_texts,
+            images=images,  # This was missing! Caused the error.
             padding=True,
             truncation=True,
             max_length=1024,
