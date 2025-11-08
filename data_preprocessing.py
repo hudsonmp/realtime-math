@@ -216,12 +216,28 @@ class StrokeNormalizer:
         return discretized_strokes
     
     def strokes_to_text(self, strokes):
-        """Convert discretized strokes to text: '<stroke> x y x y ...'"""
+        """
+        Convert discretized strokes to text with RELATIVE offsets.
+        Following paper Section 3.1: (x^tr, y^tr) = (x_t, y_t) - (x_{t-1}, y_{t-1})
+        
+        Format: '<stroke> x0 y0 dx1 dy1 dx2 dy2 ...'
+        First point uses absolute coordinates, subsequent points use relative offsets.
+        """
         tokens = []
         for stroke in strokes:
             tokens.append("<stroke>")
+            prev_x, prev_y = None, None
             for point in stroke:
-                tokens.append(f"{int(point[0])} {int(point[1])}")
+                x, y = int(point[0]), int(point[1])
+                if prev_x is not None:
+                    # Relative offset: (x_t, y_t) - (x_{t-1}, y_{t-1})
+                    dx = x - prev_x
+                    dy = y - prev_y
+                    tokens.append(f"{dx} {dy}")
+                else:
+                    # First point of stroke: use absolute coordinates
+                    tokens.append(f"{x} {y}")
+                prev_x, prev_y = x, y
         return " ".join(tokens)
 
 
@@ -282,13 +298,15 @@ class InkRenderer:
                 all_dy.append(abs(dy))
         
         # Step 2: Normalize time, dx, dy to [0, 1] for color channels
+        # Following paper Equation 1: c^R = (t_{i,j} - t_{0,0}) / max(t_{m,n})
         all_times = np.array(all_times)
         all_dx = np.array(all_dx)
         all_dy = np.array(all_dy)
         
-        t_min, t_max = all_times.min(), all_times.max()
-        if t_max > t_min:
-            normalized_times = (all_times - t_min) / (t_max - t_min)
+        t_base = all_times[0]  # t_{0,0}: first point time
+        t_max = all_times.max()
+        if t_max > t_base:
+            normalized_times = (all_times - t_base) / (t_max - t_base)
         else:
             normalized_times = np.zeros_like(all_times)
         
@@ -337,39 +355,29 @@ class InkRenderer:
     def _render_multiline(self, points, times, dx, dy):
         """
         Render ink in multiple lines for better aspect ratio handling.
-        Following paper: render with aspect ratio 1:X, then split and stack.
+        Following paper Section 3.2: render with aspect ratio 1:X, then split and stack.
+
+        FIXED: Preserve coordinate alignment by using points directly without rescaling.
+        Points are already in [0, 224] from normalization - use them directly.
         """
-        # Calculate bounding box
         if len(points) == 0:
             return Image.new('RGB', (self.image_size, self.image_size), (255, 255, 255))
-        
-        points_array = np.array(points)
-        x_coords = points_array[:, 0]
-        y_coords = points_array[:, 1]
-        
-        x_min, x_max = x_coords.min(), x_coords.max()
-        y_min, y_max = y_coords.min(), y_coords.max()
-        
-        width = x_max - x_min
-        height = y_max - y_min
-        
+
         # Create wide canvas (aspect ratio num_lines:1)
+        # Paper: render on image with aspect ratio 1:X, then split horizontally
         canvas_width = self.image_size * self.num_lines
         canvas_height = self.image_size
         canvas = np.ones((canvas_height, canvas_width, 3), dtype=np.float32)
-        
-        # Scale points to fit in wide canvas
-        if width > 0 and height > 0:
-            scale = min((canvas_width - 10) / width, (canvas_height - 10) / height)
-        else:
-            scale = 1.0
-        
-        # Draw each point
+
+        # Draw each point directly using normalized coordinates
+        # Since strokes are already normalized to [0, 224], we can use coordinates directly
+        # to preserve alignment with text representation
         for i, (x, y) in enumerate(points):
-            # Scale and center in wide canvas
-            img_x = int((x - x_min) * scale + 5)
-            img_y = int((y - y_min) * scale + 5)
-            
+            # Use coordinates directly - they're already in [0, 224]
+            # For multi-line: map x to wide canvas proportionally
+            img_x = int(x * self.num_lines)  # Scale x to [0, 448] for 2 lines
+            img_y = int(y)  # Keep y in [0, 224]
+
             # Ensure within bounds
             if 0 <= img_x < canvas_width and 0 <= img_y < canvas_height:
                 # Set color with line width for visibility
@@ -381,8 +389,9 @@ class InkRenderer:
                             canvas[py, px, 0] = times[i]  # Red channel
                             canvas[py, px, 1] = dx[i]     # Green channel
                             canvas[py, px, 2] = dy[i]     # Blue channel
-        
+
         # Split into multiple lines and stack vertically
+        # Paper: "split horizontally and merged vertically to produce a single square image"
         line_width = self.image_size
         lines = []
         for i in range(self.num_lines):
@@ -390,14 +399,16 @@ class InkRenderer:
             end_x = start_x + line_width
             line = canvas[:, start_x:end_x, :]
             lines.append(line)
-        
-        # Stack lines vertically
+
+        # Stack lines vertically to get (448, 224) for 2 lines
         final_canvas = np.vstack(lines)
-        
-        # Resize to square output
+
+        # Resize to square output (224x224)
+        # This resize is acceptable because it maintains the overall structure
+        # The key is that before resize, coordinates were used directly
         final_image = Image.fromarray((final_canvas * 255).astype(np.uint8), mode='RGB')
         final_image = final_image.resize((self.image_size, self.image_size), Image.LANCZOS)
-        
+
         return final_image
 
 
@@ -552,17 +563,18 @@ class MathWritingDataset(Dataset):
 
 def collate_fn(batch):
     """
-    Custom collate function for batching variable-length string fields.
+    Custom collate function for batching variable-length string fields and images.
     
     Args:
         batch: List of dicts from MathWritingDataset, each containing
-               'stroke_text' and 'label' as strings.
+               'stroke_text' (str), 'image' (PIL.Image), and 'label' (str).
     
     Returns:
-        Dict with 'stroke_text' and 'label' as lists of strings.
+        Dict with 'stroke_text', 'image', and 'label' as lists.
     """
     return {
         'stroke_text': [item['stroke_text'] for item in batch],
+        'image': [item['image'] for item in batch],  # PIL Images from renderer
         'label': [item['label'] for item in batch]
     }
 
@@ -597,7 +609,8 @@ if __name__ == "__main__":
     normalizer = StrokeNormalizer(target_points_per_stroke=16)
     
     # Test on the example file
-    test_file = "mathwriting-2024-excerpt/test/00eaf4f2d3d20bb1.inkml"
+    # For Colab: Upload dataset to /content/ and update path accordingly
+    test_file = "/content/mathwriting-2024/test/00eaf4f2d3d20bb1.inkml"
     
     print(f"\n📄 Parsing: {test_file.split('/')[-1]}")
     strokes, label = parser.parse_file(test_file)
@@ -712,7 +725,8 @@ if __name__ == "__main__":
     print("="*70)
     
     try:
-        dataset = MathWritingDataset("mathwriting-2024-excerpt", split="test")
+        # For Colab: Upload full dataset to /content/mathwriting-2024
+        dataset = MathWritingDataset("/content/mathwriting-2024", split="test")
         print(f"\n✓ Dataset loaded: {len(dataset)} samples")
         
         sample = dataset[0]

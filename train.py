@@ -8,6 +8,77 @@ import os
 import shutil
 from tqdm import tqdm
 
+def ensure_hf_authentication():
+    """Ensure Hugging Face authentication is set up for gated models."""
+    from huggingface_hub import login, whoami
+    import os
+    
+    # Check if already authenticated
+    try:
+        user_info = whoami()
+        if user_info:
+            print(f"✅ Already authenticated as: {user_info.get('name', 'user')}")
+            return True
+    except Exception:
+        pass
+    
+    # Try to authenticate from environment variable or token file
+    hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+    
+    if hf_token:
+        try:
+            login(token=hf_token, add_to_git_credential=False)
+            print("✅ Authenticated using HF_TOKEN environment variable")
+            return True
+        except Exception as e:
+            print(f"⚠️  Failed to authenticate with HF_TOKEN: {e}")
+    
+    # Try Colab secrets (if running in Colab)
+    try:
+        from google.colab import userdata
+        hf_token = userdata.get('HF_TOKEN')
+        if hf_token:
+            login(token=hf_token, add_to_git_credential=False)
+            print("✅ Authenticated using HF_TOKEN from Colab secrets")
+            return True
+    except ImportError:
+        pass  # Not in Colab
+    except Exception as e:
+        print(f"⚠️  Could not authenticate with Colab secrets: {e}")
+    
+    # Final attempt: check if CLI login exists
+    try:
+        user_info = whoami()
+        if user_info:
+            print(f"✅ Using existing Hugging Face CLI login: {user_info.get('name', 'user')}")
+            return True
+    except Exception:
+        pass
+    
+    # Authentication failed - provide helpful error message
+    print("\n" + "="*70)
+    print("❌ Hugging Face Authentication Required")
+    print("="*70)
+    print("\nThe model 'google/paligemma-3b-pt-224' is a gated repository.")
+    print("You need to:")
+    print("\n1. Request access at: https://huggingface.co/google/paligemma-3b-pt-224")
+    print("2. Create a token at: https://huggingface.co/settings/tokens")
+    print("3. Authenticate using one of these methods:")
+    print("\n   Option A: Set environment variable:")
+    print("   export HF_TOKEN='your_token_here'")
+    print("\n   Option B: Login via CLI:")
+    print("   huggingface-cli login")
+    print("\n   Option C: Login programmatically:")
+    print("   from huggingface_hub import login")
+    print("   login(token='your_token_here')")
+    print("="*70)
+    
+    raise RuntimeError(
+        "Hugging Face authentication required. "
+        "Please request access to the gated model and authenticate. "
+        "See error message above for instructions."
+    )
+
 class MathTrainer:
     def __init__(self, data_dir, model_name="google/paligemma-3b-pt-224", 
                  output_dir="./checkpoints", device="cuda"):
@@ -15,7 +86,10 @@ class MathTrainer:
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
         
-        print("Loading model and processor...")
+        # Ensure authentication before loading model
+        ensure_hf_authentication()
+        
+        print("\nLoading model and processor...")
         self.processor = AutoProcessor.from_pretrained(model_name)
         self.model = PaliGemmaForConditionalGeneration.from_pretrained(
             model_name,
@@ -208,8 +282,10 @@ class MathTrainer:
 
 
 if __name__ == "__main__":
+    # For Colab: Upload full MathWriting dataset to /content/mathwriting-2024
+    # Directory structure should be: train/, valid/, test/, symbols/
     trainer = MathTrainer(
-        data_dir="mathwriting-2024-excerpt",
+        data_dir="/content/mathwriting-2024",
         output_dir="./math_lora_checkpoints"
     )
     
