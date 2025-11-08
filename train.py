@@ -80,23 +80,30 @@ def ensure_hf_authentication():
     )
 
 class MathTrainer:
-    def __init__(self, data_dir, model_name="google/paligemma-3b-pt-224", 
-                 output_dir="./checkpoints", device="cuda"):
+    def __init__(self, data_dir, model_name="google/paligemma-3b-pt-224",
+                 output_dir="./checkpoints", device="cuda", use_gradient_checkpointing=False):
         self.device = device
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        
+
         # Ensure authentication before loading model
         ensure_hf_authentication()
-        
+
         print("\nLoading model and processor...")
         self.processor = AutoProcessor.from_pretrained(model_name)
+
+        # Load model WITHOUT device_map to enable gradient checkpointing
         self.model = PaliGemmaForConditionalGeneration.from_pretrained(
             model_name,
             torch_dtype=torch.bfloat16,
-            device_map=device
         )
-        
+        self.model.to(device)
+
+        # Enable gradient checkpointing if requested (saves memory)
+        if use_gradient_checkpointing:
+            print("Enabling gradient checkpointing (memory-efficient mode)...")
+            self.model.gradient_checkpointing_enable()
+
         print("Configuring LoRA...")
         lora_config = LoraConfig(
             r=16,
@@ -108,11 +115,11 @@ class MathTrainer:
         )
         self.model = get_peft_model(self.model, lora_config)
         self.model.print_trainable_parameters()
-        
+
         print("Loading datasets...")
         self.train_ds = MathWritingDataset(data_dir, split='train')
         self.valid_ds = MathWritingDataset(data_dir, split='valid')
-        
+
         self.latex_tokenizer = LaTeXTokenizer()
         
     def collate_fn(self, batch):
