@@ -490,7 +490,7 @@ class MathWritingDataset(Dataset):
         self.renderer = InkRenderer(image_size=N, num_lines=2)
         
         # Pre-validate all files and keep only valid ones
-        print(f"Validating {len(all_files)} files in {split} split...")
+        print(f"Validating {len(all_files)} files in {split} split (with image rendering test)...")
         self.files = self._validate_files(all_files)
         
         if len(self.files) == 0:
