@@ -527,7 +527,10 @@ class MathWritingDataset(Dataset):
                 # Try normalization to ensure it works
                 normalized = self.normalizer.normalize(strokes)
                 _ = self.normalizer.strokes_to_text(normalized)
-                
+
+                # IMPORTANT: Also test rendering to catch any image generation issues
+                _ = self.renderer.render(normalized)
+
                 # If we got here, the file is valid
                 valid_files.append(file_path)
                 
@@ -543,22 +546,18 @@ class MathWritingDataset(Dataset):
     def __getitem__(self, idx):
         """Return dict with 'stroke_text', 'image', and 'label'."""
         file_path = self.files[idx]
-        
-        try:
-            strokes, label = self.parser.parse_file(file_path)
-            normalized = self.normalizer.normalize(strokes)
-            stroke_text = self.normalizer.strokes_to_text(normalized)
-            image = self.renderer.render(normalized)
-            
-            return {
-                'stroke_text': stroke_text,
-                'image': image,
-                'label': label
-            }
-            
-        except Exception as e:
-            # This should rarely happen since files are pre-validated
-            raise RuntimeError(f"Unexpected error processing {os.path.basename(file_path)}: {e}")
+
+        # Parse and process file
+        strokes, label = self.parser.parse_file(file_path)
+        normalized = self.normalizer.normalize(strokes)
+        stroke_text = self.normalizer.strokes_to_text(normalized)
+        image = self.renderer.render(normalized)
+
+        return {
+            'stroke_text': stroke_text,
+            'image': image,
+            'label': label
+        }
 
 
 def collate_fn(batch):
