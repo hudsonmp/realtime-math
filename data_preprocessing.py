@@ -504,26 +504,28 @@ class MathWritingDataset(Dataset):
     def _validate_files(self, file_list):
         """
         Pre-validate all files and return only those that can be processed.
-        
+
         Args:
             file_list: List of file paths to validate
-            
+
         Returns:
             List of valid file paths
         """
         valid_files = []
-        
-        for file_path in file_list:
+        total_files = len(file_list)
+        print_interval = max(1, total_files // 20)  # Print progress every 5%
+
+        for idx, file_path in enumerate(file_list):
             try:
                 # Try to parse and process the file
                 strokes, label = self.parser.parse_file(file_path)
-                
+
                 # Check required fields
                 if label is None:
                     raise ValueError("Missing normalizedLabel")
                 if len(strokes) == 0:
                     raise ValueError("No strokes found")
-                
+
                 # Try normalization to ensure it works
                 normalized = self.normalizer.normalize(strokes)
                 _ = self.normalizer.strokes_to_text(normalized)
@@ -533,11 +535,16 @@ class MathWritingDataset(Dataset):
 
                 # If we got here, the file is valid
                 valid_files.append(file_path)
-                
+
             except Exception as e:
                 # Silently skip invalid files (summary reported in __init__)
                 pass
-        
+
+            # Print progress for large datasets
+            if (idx + 1) % print_interval == 0 or (idx + 1) == total_files:
+                percent = (idx + 1) / total_files * 100
+                print(f"  Progress: {idx + 1}/{total_files} ({percent:.1f}%) - {len(valid_files)} valid")
+
         return valid_files
     
     def __len__(self):
