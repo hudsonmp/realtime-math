@@ -219,11 +219,12 @@ class StrokeNormalizer:
         """
         Convert discretized strokes to text with RELATIVE offsets.
         Following paper Section 3.1: (x^tr, y^tr) = (x_t, y_t) - (x_{t-1}, y_{t-1})
-        
-        Format: '<stroke> x0 y0 dx1 dy1 dx2 dy2 ...'
+
+        Format: '<image> <stroke> x0 y0 dx1 dy1 dx2 dy2 ...'
+        PaliGemma requires <image> token at the start.
         First point uses absolute coordinates, subsequent points use relative offsets.
         """
-        tokens = []
+        tokens = ["<image>"]  # PaliGemma requires this special token
         for stroke in strokes:
             tokens.append("<stroke>")
             prev_x, prev_y = None, None

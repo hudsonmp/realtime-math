@@ -120,27 +120,42 @@ class MathTrainer:
         stroke_texts = [item['stroke_text'] for item in batch]
         images = [item['image'] for item in batch]  # PIL Images from renderer
         labels = [item['label'] for item in batch]
-        
+
         # Tokenize inputs (stroke text + images) - PaliGemma expects both!
         inputs = self.processor(
             text=stroke_texts,
-            images=images,  # This was missing! Caused the error.
-            padding=True,
+            images=images,
+            padding="longest",  # Changed from True to "longest" for efficiency
             truncation=True,
             max_length=1024,
             return_tensors="pt"
         )
-        
-        # Tokenize labels
+
+        # Tokenize labels - need to match input sequence length!
+        # PaliGemma uses suffix language modeling: image + text -> label
         label_encodings = self.processor.tokenizer(
             labels,
-            padding=True,
+            padding="max_length",  # Pad to max_length
             truncation=True,
             max_length=64,
             return_tensors="pt"
         )
-        
-        inputs['labels'] = label_encodings['input_ids']
+
+        # Create labels tensor that matches input length
+        # Set non-label tokens to -100 (ignored in loss)
+        import torch
+        batch_size = inputs['input_ids'].shape[0]
+        seq_length = inputs['input_ids'].shape[1]
+        labels_tensor = torch.full((batch_size, seq_length), -100, dtype=torch.long)
+
+        # Copy label tokens to the end of sequence
+        for i, label_ids in enumerate(label_encodings['input_ids']):
+            # Find actual label length (excluding padding)
+            label_length = (label_ids != self.processor.tokenizer.pad_token_id).sum().item()
+            # Place labels at the end of the sequence
+            labels_tensor[i, -label_length:] = label_ids[:label_length]
+
+        inputs['labels'] = labels_tensor
         return inputs
     
     def train(self, epochs=10, batch_size=4, lr=1e-4, grad_accum=4):
