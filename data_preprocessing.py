@@ -465,42 +465,48 @@ class LaTeXTokenizer:
 
 class MathWritingDataset(Dataset):
     """PyTorch Dataset for MathWriting InkML files."""
-    
-    def __init__(self, data_dir, split='train', target_points=16, N=224):
+
+    def __init__(self, data_dir, split='train', target_points=16, N=224, validate_on_load=False):
         """
         Args:
             data_dir: Base directory (e.g., "mathwriting-2024-excerpt")
             split: 'train', 'valid', 'test', or 'symbols'
             target_points: Points per stroke after resampling
             N: Normalization range [0, N]
+            validate_on_load: If True, pre-validate all files (slow). If False, validate lazily (fast).
         """
         self.data_dir = data_dir
         self.split = split
-        
+
         split_path = os.path.join(data_dir, split)
         if not os.path.exists(split_path):
             raise ValueError(f"Split directory not found: {split_path}")
-        
+
         # Find all potential files
         all_files = sorted(glob.glob(os.path.join(split_path, "*.inkml")))
         if len(all_files) == 0:
             raise ValueError(f"No .inkml files found in {split_path}")
-        
+
         self.parser = InkMLParser()
         self.normalizer = StrokeNormalizer(target_points_per_stroke=target_points, N=N)
         self.renderer = InkRenderer(image_size=N, num_lines=2)
-        
-        # Pre-validate all files and keep only valid ones
-        print(f"Validating {len(all_files)} files in {split} split (with image rendering test)...")
-        self.files = self._validate_files(all_files)
-        
-        if len(self.files) == 0:
-            raise ValueError(f"No valid .inkml files found in {split_path}")
-        
-        invalid_count = len(all_files) - len(self.files)
-        if invalid_count > 0:
-            warnings.warn(f"Skipped {invalid_count}/{len(all_files)} invalid files in {split} split")
-        print(f"Loaded {len(self.files)} valid files for {split} split")
+
+        # FAST MODE: Skip pre-validation, validate lazily during training
+        if not validate_on_load:
+            print(f"⚡ Fast loading: {len(all_files):,} files in {split} split (lazy validation)")
+            self.files = all_files
+        else:
+            # SLOW MODE: Pre-validate all files (useful for testing)
+            print(f"Validating {len(all_files)} files in {split} split (with image rendering test)...")
+            self.files = self._validate_files(all_files)
+
+            if len(self.files) == 0:
+                raise ValueError(f"No valid .inkml files found in {split_path}")
+
+            invalid_count = len(all_files) - len(self.files)
+            if invalid_count > 0:
+                warnings.warn(f"Skipped {invalid_count}/{len(all_files)} invalid files in {split} split")
+            print(f"Loaded {len(self.files)} valid files for {split} split")
         
     def _validate_files(self, file_list):
         """
@@ -555,17 +561,23 @@ class MathWritingDataset(Dataset):
         """Return dict with 'stroke_text', 'image', and 'label'."""
         file_path = self.files[idx]
 
-        # Parse and process file
-        strokes, label = self.parser.parse_file(file_path)
-        normalized = self.normalizer.normalize(strokes)
-        stroke_text = self.normalizer.strokes_to_text(normalized)
-        image = self.renderer.render(normalized)
+        try:
+            # Parse and process file
+            strokes, label = self.parser.parse_file(file_path)
+            normalized = self.normalizer.normalize(strokes)
+            stroke_text = self.normalizer.strokes_to_text(normalized)
+            image = self.renderer.render(normalized)
 
-        return {
-            'stroke_text': stroke_text,
-            'image': image,
-            'label': label
-        }
+            return {
+                'stroke_text': stroke_text,
+                'image': image,
+                'label': label
+            }
+        except Exception as e:
+            # In lazy validation mode, skip invalid files and try next one
+            warnings.warn(f"Skipping invalid file {os.path.basename(file_path)}: {e}")
+            # Return next valid sample (recursive fallback)
+            return self.__getitem__((idx + 1) % len(self.files))
 
 
 def collate_fn(batch):
