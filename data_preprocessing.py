@@ -355,61 +355,35 @@ class InkRenderer:
     
     def _render_multiline(self, points, times, dx, dy):
         """
-        Render ink in multiple lines for better aspect ratio handling.
-        Following paper Section 3.2: render with aspect ratio 1:X, then split and stack.
-
-        FIXED: Preserve coordinate alignment by using points directly without rescaling.
-        Points are already in [0, 224] from normalization - use them directly.
+        Render ink directly to square canvas without distortion.
+        Simplified: just render points at their normalized coordinates [0, 224].
         """
         if len(points) == 0:
             return Image.new('RGB', (self.image_size, self.image_size), (255, 255, 255))
 
-        # Create wide canvas (aspect ratio num_lines:1)
-        # Paper: render on image with aspect ratio 1:X, then split horizontally
-        canvas_width = self.image_size * self.num_lines
-        canvas_height = self.image_size
-        canvas = np.ones((canvas_height, canvas_width, 3), dtype=np.float32)
+        # Create square canvas
+        canvas = np.ones((self.image_size, self.image_size, 3), dtype=np.float32)
 
         # Draw each point directly using normalized coordinates
-        # Since strokes are already normalized to [0, 224], we can use coordinates directly
-        # to preserve alignment with text representation
+        # Points are already in [0, 224] from normalization
         for i, (x, y) in enumerate(points):
-            # Use coordinates directly - they're already in [0, 224]
-            # For multi-line: map x to wide canvas proportionally
-            img_x = int(x * self.num_lines)  # Scale x to [0, 448] for 2 lines
-            img_y = int(y)  # Keep y in [0, 224]
+            img_x = int(x)
+            img_y = int(y)
 
             # Ensure within bounds
-            if 0 <= img_x < canvas_width and 0 <= img_y < canvas_height:
-                # Set color with line width for visibility
+            if 0 <= img_x < self.image_size and 0 <= img_y < self.image_size:
+                # Set color with small thickness for visibility
                 for dy_offset in range(-1, 2):
                     for dx_offset in range(-1, 2):
                         px = img_x + dx_offset
                         py = img_y + dy_offset
-                        if 0 <= px < canvas_width and 0 <= py < canvas_height:
+                        if 0 <= px < self.image_size and 0 <= py < self.image_size:
                             canvas[py, px, 0] = times[i]  # Red channel
                             canvas[py, px, 1] = dx[i]     # Green channel
                             canvas[py, px, 2] = dy[i]     # Blue channel
 
-        # Split into multiple lines and stack vertically
-        # Paper: "split horizontally and merged vertically to produce a single square image"
-        line_width = self.image_size
-        lines = []
-        for i in range(self.num_lines):
-            start_x = i * line_width
-            end_x = start_x + line_width
-            line = canvas[:, start_x:end_x, :]
-            lines.append(line)
-
-        # Stack lines vertically to get (448, 224) for 2 lines
-        final_canvas = np.vstack(lines)
-
-        # Resize to square output (224x224)
-        # This resize is acceptable because it maintains the overall structure
-        # The key is that before resize, coordinates were used directly
-        final_image = Image.fromarray((final_canvas * 255).astype(np.uint8), mode='RGB')
-        final_image = final_image.resize((self.image_size, self.image_size), Image.LANCZOS)
-
+        # Convert to image
+        final_image = Image.fromarray((canvas * 255).astype(np.uint8), mode='RGB')
         return final_image
 
 
