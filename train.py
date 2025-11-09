@@ -92,6 +92,11 @@ class MathTrainer:
         print("\nLoading model and processor...")
         self.processor = AutoProcessor.from_pretrained(model_name)
 
+        # Ensure pad token is set for PaliGemma
+        if self.processor.tokenizer.pad_token is None:
+            self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token
+            print("✓ Set pad_token to eos_token for proper padding")
+
         # Load model WITHOUT device_map to enable gradient checkpointing
         self.model = PaliGemmaForConditionalGeneration.from_pretrained(
             model_name,
@@ -111,7 +116,7 @@ class MathTrainer:
             target_modules=["q_proj", "v_proj"],
             lora_dropout=0.05,
             bias="none",
-            task_type="CAUSAL_LM"
+            task_type="SEQ_2_SEQ_LM"  # PaliGemma is seq2seq, not causal-only
         )
         self.model = get_peft_model(self.model, lora_config)
         self.model.print_trainable_parameters()
@@ -167,20 +172,23 @@ class MathTrainer:
     
     def train(self, epochs=10, batch_size=4, lr=1e-4, grad_accum=4):
         """Training loop."""
+        # Reduce num_workers to 2 for Colab compatibility
         train_loader = DataLoader(
-            self.train_ds, 
+            self.train_ds,
             batch_size=batch_size,
             shuffle=True,
             collate_fn=self.collate_fn,
-            num_workers=4
+            num_workers=2,
+            pin_memory=True  # Faster CPU->GPU transfer on A100
         )
-        
+
         valid_loader = DataLoader(
             self.valid_ds,
             batch_size=batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,
-            num_workers=4
+            num_workers=2,
+            pin_memory=True
         )
         
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=lr)
@@ -195,7 +203,11 @@ class MathTrainer:
         print(f"\nTraining for {epochs} epochs...")
         print(f"Steps per epoch: {len(train_loader)}")
         print(f"Total steps: {num_training_steps}")
-        
+
+        # Enable mixed precision training for A100
+        scaler = torch.cuda.amp.GradScaler()
+        print("✓ Mixed precision training enabled (A100 optimized)")
+
         self.model.train()
         global_step = 0
         best_cer = float('inf')
@@ -210,17 +222,26 @@ class MathTrainer:
             
             for step, batch in enumerate(tqdm(train_loader, desc="Training")):
                 batch = {k: v.to(self.device) for k, v in batch.items()}
-                
-                outputs = self.model(**batch)
-                loss = outputs.loss / grad_accum
-                loss.backward()
-                
+
+                # Mixed precision forward pass
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                    outputs = self.model(**batch)
+                    loss = outputs.loss / grad_accum
+
+                # Backward pass with gradient scaling
+                scaler.scale(loss).backward()
+
                 if (step + 1) % grad_accum == 0:
-                    optimizer.step()
+                    # Gradient clipping for stability
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
+                    scaler.step(optimizer)
+                    scaler.update()
                     scheduler.step()
                     optimizer.zero_grad()
                     global_step += 1
-                
+
                 epoch_loss += loss.item() * grad_accum
                 
                 if step % 100 == 0:
@@ -262,8 +283,13 @@ class MathTrainer:
                 outputs = self.model(**{**inputs, 'labels': labels})
                 total_loss += outputs.loss.item()
                 
-                # Generate predictions for CER
-                generated = self.model.generate(**inputs, max_length=64)
+                # Generate predictions for CER (deterministic for validation)
+                generated = self.model.generate(
+                    **inputs,
+                    max_length=64,
+                    do_sample=False,  # Greedy decoding for validation
+                    num_beams=1  # Faster than beam search
+                )
                 
                 # Decode and compute CER
                 for pred_ids, label_ids in zip(generated, labels):

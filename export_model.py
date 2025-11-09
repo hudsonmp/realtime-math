@@ -4,6 +4,43 @@ from transformers import AutoProcessor, PaliGemmaForConditionalGeneration
 from peft import PeftModel
 import os
 
+def ensure_hf_authentication():
+    """Ensure Hugging Face authentication is set up for gated models."""
+    from huggingface_hub import login, whoami
+
+    # Check if already authenticated
+    try:
+        user_info = whoami()
+        if user_info:
+            print(f"✅ Already authenticated as: {user_info.get('name', 'user')}")
+            return True
+    except Exception:
+        pass
+
+    # Try environment variable
+    hf_token = os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+    if hf_token:
+        try:
+            login(token=hf_token, add_to_git_credential=False)
+            print("✅ Authenticated using HF_TOKEN")
+            return True
+        except Exception as e:
+            print(f"⚠️  Authentication failed: {e}")
+
+    # Try Colab secrets
+    try:
+        from google.colab import userdata
+        hf_token = userdata.get('HF_TOKEN')
+        if hf_token:
+            login(token=hf_token, add_to_git_credential=False)
+            print("✅ Authenticated using Colab secrets")
+            return True
+    except:
+        pass
+
+    print("⚠️  No HF authentication found. May fail for gated models.")
+    return False
+
 class ModelExporter:
     def _get_device_config(self):
         """
@@ -12,17 +49,20 @@ class ModelExporter:
         """
         if torch.cuda.is_available():
             print(f"✓ CUDA detected: {torch.cuda.get_device_name(0)}")
-            print("  Using float16 with auto device mapping for GPU")
-            return torch.float16, "auto"
+            print("  Using bfloat16 with auto device mapping for GPU (A100 optimized)")
+            return torch.bfloat16, "auto"
         else:
             print("✓ No CUDA detected: Using CPU")
             print("  Using float32 to avoid slow implicit upcasts on CPU")
             return torch.float32, "cpu"
     
-    def __init__(self, base_model="google/paligemma-3b-pt-224", 
+    def __init__(self, base_model="google/paligemma-3b-pt-224",
                  lora_path="./math_lora_checkpoints/lora_epoch_final"):
+        # Ensure authentication
+        ensure_hf_authentication()
+
         print("Loading base model...")
-        
+
         # Get optimal device configuration
         torch_dtype, device_map = self._get_device_config()
         
